@@ -1,0 +1,466 @@
+#!/usr/local/bin/perl
+# vim:sts=4 sw=4 et
+# perltidy -bext=/ -se -i=4 -it=2 -ci=2 -xci -l=132 -pt=2 -ce -cti=1 -cab=4 -cb -cbo=0 -wbb="% + - * / x != == >= <= =~ !~ < > | &" -enc=utf8 -wn -sot -sct -asc -tqw -sbq=0 -csc -csct=30
+
+use strict;
+use warnings;
+use 5.024;
+
+use Git;
+
+################################################################
+# Helper functions
+################################################################
+
+my $git = Git->repository;
+
+my $branch_main    = 'refs/heads/main';
+my $re_quarterlies = qr{^refs/heads/20\d\dQ\d\z}oms;
+
+{    # sub context to avoid leaking @push_options
+    my @push_options;
+    for (my $i = 0 ; $i < $ENV{GIT_PUSH_OPTION_COUNT} ; ++$i) {
+        push @push_options, $ENV{"GIT_PUSH_OPTION_${i}"};
+    }
+
+    sub has_option {
+        my ($opt) = @_;
+        for (@push_options) {
+            return 1 if $opt eq $_;
+        }
+        return 0;
+    } ## end sub has_option
+}
+
+my @quarterlies;
+
+for ($git->command('show-ref', '--heads')) {
+    my ($hash, $ref) = split / /;
+    next if $ref !~ m{refs/heads/\d\d\d\dQ\d\z}oms;
+    push @quarterlies, $ref;
+}
+
+@quarterlies = sort @quarterlies;
+
+my $latest_quarterly = $quarterlies[-1];
+
+sub do_die {
+    die "\n================================================================\n"
+      . join("\n", @_)
+      . "\n================================================================\n\n";
+}
+
+sub short_ref {
+    my ($ref) = @_;
+    $ref =~ s{\Arefs/heads/}{}oms;
+    return $ref;
+}
+
+################################################################
+# Here starts actual hooks
+
+################################################################
+# Some filenames are forbidden in the repo.
+sub deny_filenames {
+    my (@changed) = @_;
+
+    for my $file (@changed) {
+        if (
+            $file    =~ m{\A(?:CVS|[.](?:svn|git))\z}oms    # cvs/svn/git
+            || $file =~ m{[.](?:rej|orig)\z}oms             # patch
+            || $file =~ m{[.]core\z}oms                     # core file
+           )
+        {
+            do_die
+              'This file in your commit look suspiciously like core file,',
+              'patch leftover, CVS, Subversion or git directory:',
+              $file,
+              'Please double-check your commit and try committing again.';
+        } ## end if ($file =~ m{\A(?:CVS|[.](?:svn|git))\z}oms...)
+
+        if ($file =~ m{(?:\A|/)Makefile.local\z}oms) {
+            do_die
+              'Makefile.local is a user file and MUST NOT be committed:',
+              $file;
+        }
+    } ## end for my $file (@changed)
+} ## end sub deny_filenames
+
+################################################################
+# Some filenames are discouraged in the repo.
+sub bad_filenames {
+    my (@changed) = @_;
+
+    # Gave the magic push option
+    return if has_option('allow-bad-filename');
+
+    for my $file (@changed) {
+        #if ($file =~ m{/py3}oms) {
+        #    do_die                                                                #
+        #      'Adding new py3- ports is forbidden. File:',                        #
+        #      $file,                                                              #
+        #      'The Python ports have flavors and do not need the py3- ports.';    #
+        #} ## end if ($file =~ m{/py3}oms)
+
+        if ($file =~ m{[:@]}oms) {
+            do_die                                                                     #
+              'A file in your commit has a colon (:) or (@) in the name:',             #
+              $file,                                                                   #
+              'which is not allowed. Use _ instead for patches.',                      #
+              'Or even better, generate your patches with make makepatch.',            #
+              'For further information please read:',                                  #
+              'https://docs.freebsd.org/en/books/porters-handbook/slow-patch.html',    #
+              'Please fix this and try committing again.';
+        } ## end if ($file =~ m{[:@]}oms)
+    } ## end for my $file (@changed)
+} ## end sub bad_filenames
+
+################################################################
+# Empty files forbidden
+sub empty {
+    my ($rev, @changed) = @_;
+
+    # Gave the magic push option
+    return if has_option('allow-empty');
+
+    for my $file (@changed) {
+        my $content = $git->command('show', "$rev:$file");
+
+        next if length($content) > 0;
+
+        do_die                                                             #
+          "Some files in your commit are empty: $file",                    #
+          'Please fix this and try committing again.',                     #
+          'If you really need an empty file, ask portmgr for approval',    #
+          'and push with --push-option=allow-empty';
+    } ## end for my $file (@changed)
+} ## end sub empty
+
+################################################################
+# vulm.xml has to be committed alone, as it is never merged back to the
+# quarterly branches.
+sub vuxml_unique {
+    my ($ref, @changed) = @_;
+
+    my ($seen, $other) = (0, 0);
+
+    for my $line (@changed) {
+        if ($line =~ m{\Asecurity/vuxml/vuln(?:-\d{4})?.xml\z}oms) {
+
+            # We saw some vuln.xml or vuln-xxxx.xml file
+            $seen = 1;
+        } elsif ($line !~ m{\Asecurity/vuxml/}oms) {
+
+            # We saw some other file that was not in security/vuxml (to allow
+            # changes to vuxml itself.)
+            $other = 1;
+        } ## end elsif ($line !~ m{\Asecurity/vuxml/}oms)
+    } ## end for my $line (@changed)
+
+    if ($seen && $branch_main ne $ref) {
+        do_die "Commits to security/vuxml/vuln.xml are only allowed on main";
+
+    }
+    if ($seen && $other) {
+        do_die "Commit to security/vuxml/vuln.xml first, and then other files";
+    }
+} ## end sub vuxml_unique
+
+################################################################
+# Check git cherry-pick ran with `-x`
+sub cherry_pick {
+    my ($ref, $log) = @_;
+
+    # Only do this on quarterlies
+    return if $ref !~ $re_quarterlies;
+
+    # Found the actual magic words
+    if (
+        $log =~ m{
+                  ^                                  # Start of line
+                  [(]                                # A litteral opening parenthesis
+                  cherry[ ]picked[ ]from[ ]commit[ ] # The magic words
+                  ([0-9a-fA-F]{30,})                 # A commit hash that we capture
+                  [)]                                # A litteral closing parenthesis
+                  $                                  # End of line
+                 }omsx
+       )
+    {
+        my $commit = $1;
+
+        eval {
+            # Does the object exist?
+            $git->command(
+                [ 'cat-file', '-e', $commit ],
+                {
+                    'STDERR' => 0
+                });
+
+            # Is it a commit
+            my ($type) = $git->command(
+                [ 'cat-file', '-t', $commit ],
+                {
+                    'STDERR' => 0
+                });
+            'commit' eq $type or die 'not a commit';
+
+            # Is it on the main branch?
+            $git->command(
+                [ 'merge-base', '--is-ancestor', $commit, 'main' ],
+                {
+                    'STDERR' => 0
+                });
+
+            # If we got there, return 1.
+            1;
+        } or do {
+            do_die                                                                               #
+              "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which is",       #
+              'a cherry-pick, but the commit hash is not part of the main branch.',              #
+              '',                                                                                #
+              'This is most probably because you did the cherry-pick before pushing',            #
+              'the changes to main and you ended up having to rebase your work,',                #
+              'which changed the commit hashes.',                                                #
+              '',                                                                                #
+              "If you are trying to push both main and ${\(short_ref($ref))} at the",            #
+              "same time, you will have to push main first, and then ${\(short_ref($ref))}.";    #
+        };
+    } else {
+
+        # Gave the magic push option
+        return if has_option('direct-quarterly-commit');
+
+        do_die                                                                              # Comments
+          "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which does",    # to get this
+          'not seems to be a cherry-pick.',                                                 # indented
+          '',                                                                               # properly
+          'If you did a cherry-pick, you probably forgot to add `-x`,',                     # by
+          'make sure you do run `git cherry-pick -x <hash>`.',                              # perltidy
+          '',                                                                               #
+          'If you did a direct commit, make sure it was approved first, and then run:',     #
+          "\tgit push --push-option=direct-quarterly-commit";
+    } ## end else [ if ($log =~ m{ ) (})]
+} ## end sub cherry_pick
+
+################################################################
+# Check that commits only go to the latest quarterly branch
+sub unsupported_quarterly {
+    my ($ref) = @_;
+
+    # Only applies to quarterlies
+    return if $ref !~ $re_quarterlies;
+
+    # If we're the latest, great
+    return if $ref eq $latest_quarterly;
+
+    # Gave the magic push option
+    return if has_option('unsupported-quarterly');
+
+    do_die                                                                                 # Comments
+      "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which is not",     # for
+      "the latest quarterly branch. The latest is ${\(short_ref($latest_quarterly))}.",    # indentation
+      '',                                                                                  #
+      'Please check that you really mean to do this, and got approval, use:',              #
+      "\tgit push --push-option=unsupported-quarterly";
+} ## end sub unsupported_quarterly
+
+################################################################
+# Check log does not contains stuff generated by phabricator
+# and that it is corretly formatted.
+sub stomp_bad_formatting {
+    my (@log) = @_;
+
+    my $log = join "\n", @log;
+
+    if ($log =~ m|\n\nReviewers:[\t ]+|oms) {
+        do_die "Non-standard/badly formatted template - found 'Reviewers:' instead of 'Reviewed by:'.";
+    }
+
+    if ($log =~ m|\n\nSubscribers:[\t ]+|oms) {
+        do_die "Non-standard/badly formatted template - found 'Subscribers:'.";
+    }
+
+    if ($log[0] !~ /^\S+: /oms) {
+        unless (has_option('confirm-subject')) {
+            do_die                                                                      #
+              "$ENV{GL_USER}, you are pushing a commit",                                #
+              "whose first line does not start with the regular:",                      #
+              "\tcategory/port: subject",                                               #
+              "or",                                                                     #
+              "\tcomponent: subject",                                                   #
+              '',                                                                       #
+              'Please check that you really mean to do this, then use:',                #
+              "\tgit push --push-option=confirm-subject";
+        }
+    }
+
+    # If we have more than one line, check formatting.
+    if (scalar @log > 1) {
+        if ($log[1] !~ /\A\z/oms) {
+            do_die "The second line of the commit message must be blank";
+        }
+    }
+} ## end sub stomp_bad_formatting
+
+################################################################
+# Detect merge conflicts
+sub detect_merge_conflicts {
+    my ($diff) = @_;
+
+    if (
+        $diff =~ m{
+                   ^           # Beginning of the line
+                   [+]         # A literal plus sign, remember, this is a diff
+                   (?:
+                      <{7}     # <<<<<<<
+                      |        # or
+                      >{7}     # >>>>>>>
+                   )
+                   [ ]         # A literal space
+                  }omsx
+       )
+    {
+        do_die                                                           #
+          'Some parts of your commit look suspiciously like merge',      #
+          'conflict markers.  Please double-check your diff and try',    #
+          'committing again.';
+    } ## end if ($diff =~ m{ ) (})
+} ## end sub detect_merge_conflicts
+
+################################################################
+# Require newline at end of line
+sub detect_no_newline_at_eof {
+    my ($diff) = @_;
+
+    if ($diff =~ m{^\\ No newline at end of file$}oms) {
+        do_die                                                           #
+          "Some files in your commit does not have newline at end",      #
+          "of file. Please fix this and try committing again.";
+    }
+} ## end sub detect_no_newline_at_eof
+
+################################################################
+# Check commit/author dates not in the future
+sub detect_date_in_future {
+    my ($diff) = @_;
+
+    my $time    = time();
+    my ($adate) = ($diff =~ m{^AuthorDate:\s+(\d+)}oms);
+    my ($cdate) = ($diff =~ m{^CommitDate:\s+(\d+)}oms);
+
+    if ($adate > $time || $cdate > $time) {
+        return if has_option('date-in-the-future');
+
+        do_die                                                                            #
+          "$ENV{GL_USER}, you are pushing a commit which has",                            #
+          'either the commit or the author date in the future.',                          #
+          '',                                                                             #
+          "The current date is: ${\(scalar localtime $time)} ($time)",                    #
+          "The author date is:  ${\(scalar localtime $adate)} ($adate)",                  #
+          "The commit date is:  ${\(scalar localtime $cdate)} ($cdate)",                  #
+          '',                                                                             #
+          'Please check that you really mean to do this, and got approval, then use:',    #
+          "\tgit push --push-option=date-in-the-future";
+    } ## end if ($adate > $time || $cdate > $time)
+} ## end sub detect_date_in_future
+
+################################################################
+# Check content of some files
+sub stage_only {
+    my ($rev, @changed) = @_;
+
+    # Gave the magic push option
+    return if has_option('allow-bad-staging');
+
+    for my $file (@changed) {
+        if ($file =~ m{/Makefile}oms) {
+            my $content = $git->command('show', "$rev:$file");
+
+            if ($content =~ m{if[^\n]*def[^\n]*(NOPORTDOCS|NOPORTEXAMPLES)}oms) {
+                do_die                                                         #
+                  "Do not commit ports with NOPORTDOCS or NOPORTEXAMPLES.",    #
+                  "The port must be converted to proper OPTIONS.  See",        #
+                  "https://docs.freebsd.org/en/books/porters-handbook/makefiles/#makefile-options";
+            } ## end if ($content =~ m{if[^\n]*def[^\n]*(NOPORTDOCS|NOPORTEXAMPLES)}oms)
+
+            if ($content =~ m{if[^\n]*def[^\n]*NOPORTDATA}oms) {
+                do_die                                                         #
+                  "Do not commit ports with NOPORTDATA.",                      #
+                  "NOPORTDATA is nonsense as a variable affecting all ports.";
+            }
+        } elsif ($file =~ m{/pkg-plist}oms) {
+            my $content = $git->command('show', "$rev:$file");
+
+            if ($content =~ m{%%PORTDATA%%}oms) {
+                do_die                                                         #
+                  "Do not commit ports with %%PORTDATA%%.",                    #
+                  "NOPORTDATA is nonsense as a variable affecting all ports.";
+            }
+
+            if ($content =~ m{%%PYTHON_PYOEXTENSION%%}oms) {
+                do_die                                                         #
+                  "Do not commit ports with %%PYTHON_PYOEXTENSION%%.",         #
+                  "Use either pyo for python 2.7 ports or opt-1.pyc for python 3.5+ ports.";
+            }
+        } elsif ($file =~ m{/distinfo}oms) {
+            my $content = $git->command('show', "$rev:$file");
+
+            if ($content !~ m{^TIMESTAMP = [0-9]*$}oms) {
+                do_die                                                                 #
+                  "Do not commit ports without TIMESTAMP in their distinfo files.",    #
+                  "Rerun make makesum to add it.";
+            }
+        } ## end elsif ($file =~ m{/distinfo}oms)
+    } ## end for my $file (@changed)
+} ## end sub stage_only
+
+sub detect_subpkg {
+    my ($diff) = @_;
+
+    # Gave the magic push option
+    return if has_option('allow-subpkg');
+
+    if ($diff =~ m{^\+SUBPACKAGES=}oms) {
+        do_die                                                            #
+          "You are committing SUBPACKAGES, a feature still experimental", #
+          'Please, ask portmgr for approval and push',                    #
+          'with --push-option=allow-subpkg',                              #
+          'Any unahtorized commit will be reverted';
+    }
+} ## end sub detect_subpkg
+
+################################################################
+# Main loop, everything called in here.
+for (<STDIN>) {
+    chomp;
+    my ($old, $new, $ref) = split / /;
+
+    unsupported_quarterly($ref);
+
+    for my $rev ($git->command('log', '--format=%H', $new, '--not', '--all')) {
+
+        # Get the raw body of the commit
+        my @log = $git->command('show', '-s', '--format=%B', $rev);
+
+        # Get the actual diff of the commit
+        # Discard deletes, we don't care about their diffs
+        my $diff = $git->command('show', '--irreversible-delete', '--date=raw', '--format=fuller', $rev);
+
+        # Get the changed files, but not the deleted files, we don't need them for the hooks
+        my @changed = $git->command('diff', '--name-only', '--diff-filter=d', "$rev~1..$rev");
+
+        deny_filenames(@changed);
+        bad_filenames(@changed);
+        vuxml_unique($ref, @changed);
+        cherry_pick($ref, join "\n", @log);
+        stomp_bad_formatting(@log);
+        detect_merge_conflicts($diff);
+        detect_no_newline_at_eof($diff);
+        detect_date_in_future($diff);
+        detect_subpkg($diff);
+        empty($rev, @changed);
+        stage_only($rev, @changed);
+    } ## end for my $rev ($git->command('log',...))
+} ## end for (<STDIN>)
+
+exit 0;

@@ -1,0 +1,45 @@
+#!/usr/local/bin/perl
+
+use strict;
+use warnings;
+
+sub email_ok {
+    my ($email) = shift;
+    my $expected_email = "$ENV{GL_USER}\@FreeBSD.org";
+    return $email eq $expected_email;
+}
+
+sub name_ok {
+    my ($name) = shift;
+    my @pwent = getpwnam($ENV{GL_USER});
+    my @gecos = split(/,/, $pwent[6]);
+    my $expected_name = $gecos[0];
+    return $name eq $expected_name;
+}
+
+my $push_option_count = $ENV{GIT_PUSH_OPTION_COUNT};
+for (my $i = 0; $i < $push_option_count; ++$i) {
+    exit 0 if $ENV{"GIT_PUSH_OPTION_${i}"} eq "confirm-author";
+}
+
+foreach my $line (<STDIN>) {
+    my ($old, $new, $ref) = split / /, $line;
+    for my $rev (`git log --format="%an\t%ae\t%H\t%s" $new --not --all`) {
+        chomp($rev);
+        my ($author_name, $author_email, $hash, $subject) = split /\t/, $rev;
+
+        die "\n================================================================\n" .
+          "$ENV{GL_USER}, you are pushing a commit which author and committer are different:\n" .
+          "\n" .
+          "author: $author_name <$author_email>\n" .
+          "commit: $hash\n" .
+          "subject: $subject\n" .
+          "\n" .
+          "Please check the author name and email are correct and then use:\n" .
+          "\tgit push --push-option=confirm-author\n" .
+          "================================================================\n"
+          unless email_ok($author_email) and name_ok($author_name);
+    }
+}
+
+exit 0;

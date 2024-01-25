@@ -1,0 +1,93 @@
+#!/usr/local/bin/perl
+
+use strict;
+use warnings;
+
+my $conf_base = "/home/git/admin-checkouts";
+
+sub approvers_ok {
+        my ($repo, $ref, @approvers) = @_;
+
+        my $expected_approver = "(core|doceng|portmgr)";
+
+        if ($ref eq "refs/heads/main") {
+                # allow pushing to main branch
+		return 1;
+        } elsif ($repo eq "ports" and $ref =~ "^refs/heads/[0-9][0-9][0-9][0-9]Q[1-4]\$") {
+		# allowed ports quarterly branch
+		return 1;
+        } elsif ($ref =~ "^refs/heads/vendor/" or $ref =~ "^refs/tags/vendor/") {
+                # allow pushing to vendor/*
+                return 1;
+        } elsif ($ref =~ "^refs/heads/stable/") {
+                # allow pushing to stable/*
+                return 1;
+        } elsif ($ref =~ "^refs/tags/release/" or $ref =~ "^refs/heads/releng/13.3") {
+                $expected_approver = "re";
+        } elsif ($ref =~ "^refs/heads/releng/") {
+		# releng/ needs so
+                $expected_approver = "(security-officer|so)";
+        } elsif ($ref =~ "^refs/internal/admin" or $ref =~ "^refs/tags/") {
+		# doc->doceng, ports->portmgr, src->core,
+		if ($repo eq "doc") {
+			my $expected_approver = "(doceng|core)";
+		} elsif ($repo eq "ports") {
+			my $expected_approver = "(portmgr|core)";
+		} elsif ($repo eq "src") {
+			$expected_approver = "core";
+		}
+        } else {
+                return 0;
+        }
+
+        for (@approvers) {
+                return 1 if ($_ =~ /^$expected_approver$/);
+        }
+
+        return 0;
+}
+
+my ($ref, $old, $new) = @ARGV;
+my $repo = $ARGV[7];
+my $approvers_conf = "$conf_base/$repo/approvers";
+
+if (-r $approvers_conf) {
+        print "$$: Read $approvers_conf\n";
+        if (not open(APP, "<$approvers_conf")) {
+                die "Cannot open approvers file ($!).\n";
+        }
+
+        while (<APP>) {
+                chomp;
+                next if (/^#/);
+                my ($pattern, $approver) = split /=/, $_;
+                $pattern =~ s/^\s+|\s+$//g;
+                $approver =~ s/^\s+|\s+$//g;
+                my ($refs, $path) = split /\s+/, $pattern;
+		$path = '' unless ($path);
+        }
+}
+
+for my $hash (`git log --format="%H" $new --not --all`) {
+    chomp($hash);
+
+    my $commit = `git cat-file -p $hash`;
+    my @approvers;
+    for (split /\n/, $commit) {
+        push(@approvers, split /[\s,\(\)]+/, $1) if /^Approved(?:-|\s+)by:\s*(.*)/;
+    }
+
+    die "\n================================================================\n" .
+      "*** No valid \"Approved-by:\" line ***\n" .
+      "----------------------------------------------------------------\n" .
+      "ref = $ref\n" .
+      "old = $old\n" .
+      "new = $new\n" .
+      "repo = $repo\n" .
+      "hash = $hash\n" .
+      "commit:\n$commit\n" .
+      "================================================================\n\n"
+      unless approvers_ok($repo, $ref, @approvers);
+}
+
+exit 0;

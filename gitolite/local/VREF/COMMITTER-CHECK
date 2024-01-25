@@ -1,0 +1,41 @@
+#!/usr/local/bin/perl
+
+use strict;
+use warnings;
+
+sub email_ok {
+    my ($committer_email) = shift;
+    my $expected_email = "$ENV{GL_USER}\@FreeBSD.org";
+    return $committer_email eq $expected_email;
+}
+
+sub name_ok {
+    my ($committer_name) = shift;
+    my @pwent = getpwnam($ENV{GL_USER});
+    my @gecos = split(/,/, $pwent[6]);
+    my $expected_name = $gecos[0];
+    return $committer_name eq $expected_name;
+}
+
+my ($ref, $old, $new) = @ARGV;
+
+#if ($ref =~ "^refs/heads/vendor/") {
+if ($ref =~ "^refs/heads/vendor/openzfs/") {
+	# vendor branch is an exception
+	exit 0;
+}
+
+for my $rev (`git log --format="%cn\t%ce\t%H\t%s" $new --not --all`) {
+    chomp($rev);
+    my ($committer_name, $committer_email, $hash, $subject) = split /\t/, $rev;
+
+    die "\n================================================================\n" .
+      "$ENV{GL_USER}, you can't push commit by $committer_name <$committer_email>\n" .
+      "\t$hash - $subject\n" .
+      "\n" .
+      "Please check output of freefall:/usr/local/bin/gen-gitconfig.sh\n" .
+      "================================================================\n\n"
+      unless email_ok($committer_email) and name_ok($committer_name);
+}
+
+exit 0;

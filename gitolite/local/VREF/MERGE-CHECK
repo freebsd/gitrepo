@@ -1,0 +1,48 @@
+#!/bin/sh
+
+refname=$1
+oldrev=$2
+newrev=$3
+oldtree=$4
+newtree=$5
+access_flag=$6
+refex=$7
+repo=$8
+
+reject()
+{
+	echo "================================================================"
+	echo "$1"
+	echo "================================================================"
+	exit 1
+}
+
+for rev in $(git log --format=%H "${oldrev}..${newrev}" 2>/dev/null); do
+	p2=$(git log -1 --format=%P "${rev}" | awk '{print $2}')
+	# if this is a merge commit
+	if [ -n "${p2}" ]; then
+		branch_src=$(git branch --contains "${p2}" | grep '^  vendor/')
+		branch_dst=${refname}
+
+		if [ -z "$branch_src" ]; then
+			reject "Currently only allow merge from vendor/*"
+		else
+			branch_src="refs/heads/${branch_src##  }"
+		fi
+
+		if [ "${branch_src}" = "refs/heads/vendor/openzfs/zfs-2.1-release" ] && \
+			[ "${branch_dst}" = "refs/heads/stable/13" ]; then
+			exit 0
+		fi
+		if [ "${branch_src}" = "refs/heads/vendor/openzfs/zfs-2.2-release" ] && \
+			[ "${branch_dst}" = "refs/heads/stable/14" ]; then
+			exit 0
+		fi
+
+		if [ "${branch_dst}" = "refs/heads/main" ]; then
+			exit 0
+		fi
+
+		reject "Currently only allow merge from vendor/* to main"
+	fi
+done
