@@ -19,23 +19,37 @@ reject()
 	exit 1
 }
 
-# create: 0000->1234
-# update: 1234->5678
-# delete: 5678->0000
+# --- Interpret
+# 0000->1234 (create)
+# 1234->2345 (update)
+# 2345->0000 (delete)
 if expr "$oldrev" : '0*$' >/dev/null; then
 	change_type="create"
-	obj_type=$(git cat-file -t "${newrev}" 2> /dev/null)
-elif expr "$newrev" : '0*$' >/dev/null; then
-	change_type="delete"
-	obj_type=$(git cat-file -t "${oldrev}" 2> /dev/null)
 else
-	change_type="update"
-	obj_type=$(git cat-file -t "${newrev}" 2> /dev/null)
+	if expr "$newrev" : '0*$' >/dev/null; then
+		change_type="delete"
+	else
+		change_type="update"
+	fi
 fi
+
+# --- Get the revision types
+newrev_type=$(git cat-file -t "$newrev" 2> /dev/null)
+oldrev_type=$(git cat-file -t "$oldrev" 2> /dev/null)
+case "$change_type" in
+create|update)
+	rev="$newrev"
+	rev_type="$newrev_type"
+	;;
+delete)
+	rev="$oldrev"
+	rev_type="$oldrev_type"
+	;;
+esac
 
 case "${refname}" in
 refs/tags/*)
-	if [ ${obj_type} = "tag" ]; then
+	if [ ${rev_type} = "tag" ]; then
 		# allow annotated tag
 		return 0
 	fi
