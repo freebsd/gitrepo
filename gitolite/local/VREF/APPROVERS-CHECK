@@ -8,7 +8,7 @@ my $conf_base = "/home/git/admin-checkouts";
 sub approvers_ok {
         my ($repo, $ref, @approvers) = @_;
 
-        my $expected_approver = "(core|doceng|portmgr)";
+        my $expected_approver = "(core|doceng|portmgr|srcmgr)";
 
         if ($ref eq "refs/heads/main") {
                 # allow pushing to main branch
@@ -22,7 +22,7 @@ sub approvers_ok {
         } elsif ($ref =~ "^refs/heads/stable/") {
                 # allow pushing to stable/*
                 return 1;
-        } elsif ($ref =~ "^refs/tags/release/" or $ref =~ "^refs/heads/releng/13.4") {
+        } elsif ($ref =~ "^refs/tags/release/" or $ref =~ "^refs/heads/releng/14.2") {
                 $expected_approver = "re";
         } elsif ($ref =~ "^refs/heads/releng/") {
 		# releng/ needs so
@@ -34,7 +34,7 @@ sub approvers_ok {
 		} elsif ($repo eq "ports") {
 			my $expected_approver = "(portmgr|core)";
 		} elsif ($repo eq "src") {
-			$expected_approver = "core";
+			$expected_approver = "(srcmgr|core)";
 		}
         } else {
                 return 0;
