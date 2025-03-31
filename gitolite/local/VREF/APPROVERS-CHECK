@@ -22,7 +22,7 @@ sub approvers_ok {
         } elsif ($ref =~ "^refs/heads/stable/") {
                 # allow pushing to stable/*
                 return 1;
-        } elsif ($ref =~ "^refs/tags/release/" or $ref =~ "^refs/heads/releng/14.2") {
+        } elsif ($ref =~ "^refs/tags/release/" or $ref =~ "^refs/heads/releng/14.3") {
                 $expected_approver = "re";
         } elsif ($ref =~ "^refs/heads/releng/") {
 		# releng/ needs so
