@@ -1,0 +1,222 @@
+#!/usr/local/bin/perl
+# vim:sts=4 sw=4 et
+# perltidy -bext=/ -se -i=4 -it=2 -ci=2 -xci -l=132 -pt=2 -ce -cti=1 -cab=4 -cb -cbo=0 -wbb="% + - * / x != == >= <= =~ !~ < > | &" -enc=utf8 -wn -sot -sct -asc -tqw -sbq=0 -csc -csct=30
+
+use strict;
+use warnings;
+use 5.024;
+
+use Git;
+
+################################################################
+# Helper functions
+################################################################
+
+my $git = Git->repository;
+
+my $branch_main   = 'refs/heads/main';
+my $branch_stable = qr{^refs/heads/stable/\d\d}oms;
+
+{    # sub context to avoid leaking @push_options
+    my @push_options;
+    for (my $i = 0 ; $i < $ENV{GIT_PUSH_OPTION_COUNT} ; ++$i) {
+        push @push_options, $ENV{"GIT_PUSH_OPTION_${i}"};
+    }
+
+    sub has_option {
+        my ($opt) = @_;
+        for (@push_options) {
+            return 1 if $opt eq $_;
+        }
+        return 0;
+    } ## end sub has_option
+}
+
+sub do_die {
+    die "\n================================================================\n"
+      . join("\n", @_)
+      . "\n================================================================\n\n";
+}
+
+sub short_ref {
+    my ($ref) = @_;
+    $ref =~ s{\Arefs/heads/}{}oms;
+    return $ref;
+}
+
+################################################################
+# Here starts actual hooks
+
+################################################################
+# Check git cherry-pick ran with `-x`
+sub cherry_pick {
+    my ($ref, $log) = @_;
+
+    # Only do this on stable branches
+    return if $ref !~ $branch_stable;
+
+    # Found the actual magic words
+    if (
+        $log =~ m{
+                  ^                                  # Start of line
+                  [(]                                # A litteral opening parenthesis
+                  cherry[ ]picked[ ]from[ ]commit[ ] # The magic words
+                  ([0-9a-fA-F]{30,})                 # A commit hash that we capture
+                  [)]                                # A litteral closing parenthesis
+                  $                                  # End of line
+                 }omsx
+       )
+    {
+        my $commit = $1;
+
+        eval {
+            # Does the object exist?
+            $git->command(
+                [ 'cat-file', '-e', $commit ],
+                {
+                    'STDERR' => 0
+                });
+
+            # Is it a commit
+            my ($type) = $git->command(
+                [ 'cat-file', '-t', $commit ],
+                {
+                    'STDERR' => 0
+                });
+            'commit' eq $type or die 'not a commit';
+
+            # Is it on the main branch?
+            $git->command(
+                [ 'merge-base', '--is-ancestor', $commit, 'main' ],
+                {
+                    'STDERR' => 0
+                });
+
+            # If we got there, return 1.
+            1;
+        } or do {
+            do_die                                                                               #
+              "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which is",       #
+              'a cherry-pick, but the commit hash is not part of the main branch.',              #
+              '',                                                                                #
+              'This is most probably because you did the cherry-pick before pushing',            #
+              'the changes to main and you ended up having to rebase your work,',                #
+              'which changed the commit hashes.',                                                #
+              '',                                                                                #
+              "If you are trying to push both main and ${\(short_ref($ref))} at the",            #
+              "same time, you will have to push main first, and then ${\(short_ref($ref))}.";    #
+        };
+    } else {
+
+        # Gave the magic push option
+        return if has_option('direct-stable-commit');
+
+        do_die                                                                              # Comments
+          "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which does",    # to get this
+          'not seems to be a cherry-pick.',                                                 # indented
+          '',                                                                               # properly
+          'If you did a cherry-pick, you probably forgot to add `-x`,',                     # by
+          'make sure you do run `git cherry-pick -x <hash>`.',                              # perltidy
+          '',                                                                               #
+          'If you did a direct commit, make sure it was approved first, and then run:',     #
+          "\tgit push --push-option=direct-stable-commit";
+    } ## end else [ if ($log =~ m{ ) (})]
+} ## end sub cherry_pick
+
+################################################################
+# Check log does not contains stuff generated by phabricator
+# and that it is corretly formatted.
+sub stomp_bad_formatting {
+    my (@log) = @_;
+
+    my $log = join "\n", @log;
+
+    if ($log =~ m|\n\nReviewers:[\t ]+|oms) {
+        do_die "Non-standard/badly formatted template - found 'Reviewers:' instead of 'Reviewed by:'.";
+    }
+
+    if ($log =~ m|\n\nSubscribers:[\t ]+|oms) {
+        do_die "Non-standard/badly formatted template - found 'Subscribers:'.";
+    }
+
+    # If we have more than one line, check formatting.
+    if (scalar @log > 1) {
+        if ($log[1] !~ /\A\z/oms) {
+            do_die "The second line of the commit message must be blank";
+        }
+    }
+} ## end sub stomp_bad_formatting
+
+################################################################
+# Detect merge conflicts
+sub detect_merge_conflicts {
+    my ($diff) = @_;
+
+    if (
+        $diff =~ m{
+                   ^           # Beginning of the line
+                   [+]         # A literal plus sign, remember, this is a diff
+                   (?:
+                      <{7}     # <<<<<<<
+                      |        # or
+                      >{7}     # >>>>>>>
+                   )
+                   [ ]         # A literal space
+                  }omsx
+       )
+    {
+        do_die                                                           #
+          'Some parts of your commit look suspiciously like merge',      #
+          'conflict markers.  Please double-check your diff and try',    #
+          'committing again.';
+    } ## end if ($diff =~ m{ ) (})
+} ## end sub detect_merge_conflicts
+
+################################################################
+# Check commit/author dates not in the future
+sub detect_date_in_future {
+    my ($diff) = @_;
+
+    my $time    = time();
+    my ($adate) = ($diff =~ m{^AuthorDate:\s+(\d+)}oms);
+    my ($cdate) = ($diff =~ m{^CommitDate:\s+(\d+)}oms);
+
+    if ($adate > $time || $cdate > $time) {
+        return if has_option('date-in-the-future');
+
+        do_die                                                                            #
+          "$ENV{GL_USER}, you are pushing a commit which has",                            #
+          'either the commit or the author date in the future.',                          #
+          '',                                                                             #
+          "The current date is: ${\(scalar localtime $time)} ($time)",                    #
+          "The author date is:  ${\(scalar localtime $adate)} ($adate)",                  #
+          "The commit date is:  ${\(scalar localtime $cdate)} ($cdate)",                  #
+          '',                                                                             #
+          'Please check that you really mean to do this, and got approval, then use:',    #
+          "\tgit push --push-option=date-in-the-future";
+    } ## end if ($adate > $time || $cdate > $time)
+} ## end sub detect_date_in_future
+
+################################################################
+# Main loop, everything called in here.
+for (<STDIN>) {
+    chomp;
+    my ($old, $new, $ref) = split / /;
+
+    for my $rev ($git->command('log', '--format=%H', $new, '--not', '--all')) {
+
+        # Get the raw body of the commit
+        my @log = $git->command('show', '-s', '--format=%B', $rev);
+
+        # Get the actual diff of the commit
+        # Discard deletes, we don't care about their diffs
+        my $diff = $git->command('show', '--irreversible-delete', '--date=raw', '--format=fuller', $rev);
+
+        cherry_pick($ref, join "\n", @log);
+        stomp_bad_formatting(@log);
+        detect_merge_conflicts($diff);
+        detect_date_in_future($diff);
+    } ## end for my $rev ($git->command('log',...))
+} ## end for (<STDIN>)
+
+exit 0;
