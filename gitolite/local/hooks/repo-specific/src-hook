@@ -85,26 +85,12 @@ sub cherry_pick {
                 });
             'commit' eq $type or die 'not a commit';
 
-            # Is it on the main branch?
-            $git->command(
-                [ 'merge-base', '--is-ancestor', $commit, 'main' ],
-                {
-                    'STDERR' => 0
-                });
-
             # If we got there, return 1.
             1;
         } or do {
             do_die                                                                               #
               "$ENV{GL_USER}, you are pushing a commit to ${\(short_ref($ref))} which is",       #
-              'a cherry-pick, but the commit hash is not part of the main branch.',              #
-              '',                                                                                #
-              'This is most probably because you did the cherry-pick before pushing',            #
-              'the changes to main and you ended up having to rebase your work,',                #
-              'which changed the commit hashes.',                                                #
-              '',                                                                                #
-              "If you are trying to push both main and ${\(short_ref($ref))} at the",            #
-              "same time, you will have to push main first, and then ${\(short_ref($ref))}.";    #
+              'a cherry-pick, but the commit hash is not part of the repository.',               #
         };
     } else {
 
