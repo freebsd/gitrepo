@@ -24,14 +24,15 @@ for (my $i = 0; $i < $push_option_count; ++$i) {
 
 foreach my $line (<STDIN>) {
     my ($old, $new, $ref) = split / /, $line;
-    for my $rev (`git log --format="%an\t%ae\t%H\t%s" $new --not --all`) {
+    for my $rev (`git log --format="%an\t%ae\t%cn\t%ce\t%H\t%s" $new --not --all`) {
         chomp($rev);
-        my ($author_name, $author_email, $hash, $subject) = split /\t/, $rev;
+        my ($author_name, $author_email, $committer_name, $committer_email, $hash, $subject) = split /\t/, $rev;
 
         die "\n================================================================\n" .
           "$ENV{GL_USER}, you are pushing a commit which author and committer are different:\n" .
           "\n" .
           "author: $author_name <$author_email>\n" .
+          "committer: $committer_name <$committer_email>\n" .
           "commit: $hash\n" .
           "subject: $subject\n" .
           "\n" .

@@ -145,7 +145,7 @@ sub vuxml_unique {
     my ($seen, $other) = (0, 0);
 
     for my $line (@changed) {
-        if ($line =~ m{\Asecurity/vuxml/vuln(?:-\d{4})?.xml\z}oms) {
+        if ($line =~ m{\Asecurity/vuxml/vuln(?:/\d{4})?.xml\z}oms) {
 
             # We saw some vuln.xml or vuln-xxxx.xml file
             $seen = 1;

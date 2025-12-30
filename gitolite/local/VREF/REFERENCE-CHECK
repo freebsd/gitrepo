@@ -71,7 +71,7 @@ refs/heads/stable/*)
 	if [ ${repo} != "src" ]; then
 		reject "Disallowed reference: ${refname}"
 	fi
-	if [ ${change_type} = "create" ] && [ ${refname} != "refs/heads/stable/14" ] ; then
+	if [ ${change_type} = "create" ] && [ ${refname} != "refs/heads/stable/15" ] ; then
 		reject "Disallowed create reference: ${refname}"
 	fi
 	# allowed reference

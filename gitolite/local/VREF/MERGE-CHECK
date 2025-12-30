@@ -38,6 +38,10 @@ for rev in $(git log --format=%H "${oldrev}..${newrev}" 2>/dev/null); do
 			[ "${branch_dst}" = "refs/heads/stable/14" ]; then
 			exit 0
 		fi
+		if [ "${branch_src}" = "refs/heads/vendor/openzfs/zfs-2.4-release" ] && \
+			[ "${branch_dst}" = "refs/heads/stable/15" ]; then
+			exit 0
+		fi
 
 		if [ "${branch_dst}" = "refs/heads/main" ]; then
 			exit 0
