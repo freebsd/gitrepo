@@ -151,10 +151,14 @@ sub detect_merge_conflicts {
                   }omsx
        )
     {
-        do_die                                                           #
-          'Some parts of your commit look suspiciously like merge',      #
-          'conflict markers.  Please double-check your diff and try',    #
-          'committing again.';
+    return if has_option('conflicts-are-on-purpose');
+        do_die                                                                            #
+          'Some parts of your commit look suspiciously like merge',                       #
+          'conflict markers.  Please double-check your diff and try',                     #
+          'committing again.',                                                            #
+          '',                                                                             #
+          'Please check that you really mean to do this, and got approval, then use:',    #
+          "\tgit push --push-option=conflicts-are-on-purpose";
     } ## end if ($diff =~ m{ ) (})
 } ## end sub detect_merge_conflicts
 

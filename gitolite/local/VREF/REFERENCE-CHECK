@@ -49,9 +49,9 @@ esac
 
 case "${refname}" in
 refs/tags/*)
-	if [ ${rev_type} = "tag" ]; then
+	if [ "${rev_type}" = "tag" ]; then
 		# allow annotated tag
-		return 0
+		exit 0
 	fi
 	# un-annotated tag
 	reject "Tags should be annotated."
@@ -62,23 +62,23 @@ refs/heads/main)
 	;;
 refs/heads/vendor/*)
 	# allowed reference
-	if [ ${repo} != "src" ]; then
+	if [ "${repo}" != "src" ]; then
 		reject "Disallowed reference: ${refname}"
 	fi
 	exit 0
 	;;
 refs/heads/stable/*)
-	if [ ${repo} != "src" ]; then
+	if [ "${repo}" != "src" ]; then
 		reject "Disallowed reference: ${refname}"
 	fi
-	if [ ${change_type} = "create" ] && [ ${refname} != "refs/heads/stable/15" ] ; then
+	if [ "${change_type}" = "create" ] && [ "${refname}" != "refs/heads/stable/15" ] ; then
 		reject "Disallowed create reference: ${refname}"
 	fi
 	# allowed reference
 	exit 0
 	;;
 refs/heads/releng/*)
-	if [ ${repo} != "src" ]; then
+	if [ "${repo}" != "src" ]; then
 		reject "Disallowed reference: ${refname}"
 	fi
 	# allowed reference
@@ -86,12 +86,12 @@ refs/heads/releng/*)
 	;;
 refs/heads/[0-9][0-9][0-9][0-9]Q[1-4])
 	# allowed reference in ports
-	if [ ${repo} != "ports" ]; then
+	if [ "${repo}" != "ports" ]; then
 		reject "Disallowed reference: ${refname}"
 	fi
-	if [ ${change_type} = "create" ]; then
+	if [ "${change_type}" = "create" ]; then
 		for i in ${portmgr}; do
-			if [ ${GL_USER} = ${i} ]; then
+			if [ "${GL_USER}" = "${i}" ]; then
 				exit 0
 			fi
 		done
