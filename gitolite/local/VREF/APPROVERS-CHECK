@@ -68,6 +68,21 @@ if (-r $approvers_conf) {
         }
 }
 
+# Load re whitelist (one login per line)
+my $re_whitelist_file = "$conf_base/re";
+my %re_allowed = ();
+if (-r $re_whitelist_file) {
+	if (open my $fh, '<', $re_whitelist_file) {
+		while (my $line = <$fh>) {
+			chomp $line;
+			$line =~ s/^\s+|\s+$//g;
+			next unless length $line;
+			$re_allowed{$line} = 1;
+		}
+		close $fh;
+	}
+}
+
 for my $hash (`git log --format="%H" $new --not --all`) {
     chomp($hash);
 
@@ -75,6 +90,15 @@ for my $hash (`git log --format="%H" $new --not --all`) {
     my @approvers;
     for (split /\n/, $commit) {
         push(@approvers, split /[\s,\(\)]+/, $1) if /^Approved(?:-|\s+)by:\s*(.*)/;
+    }
+    
+    # If ref is exactly releng/14.4, allow users in re whitelist regardless of Approved-by
+    if ($ref eq 'refs/heads/releng/14.4') {
+	    # Determine pusher identity: prefer GL_USER if set
+	    my $pusher = $ENV{GL_USER} || $ENV{USER} || '';
+	    if ($pusher && $re_allowed{$pusher}) {
+		    next; # allowed
+	    }
     }
 
     die "\n================================================================\n" .
